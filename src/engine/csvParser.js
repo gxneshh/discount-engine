@@ -49,8 +49,8 @@ export function parseRulesCSV(csvText) {
     }
 
     const scope = row.scope.trim().toLowerCase()
-    if (scope !== 'brand' && scope !== 'platform') {
-      errors.push(`Row ${rowNum}: scope must be "brand" or "platform", got "${row.scope}"`)
+    if (scope !== 'brand' && scope !== 'platform' && scope !== 'product' && scope !== 'category') {
+      errors.push(`Row ${rowNum}: scope must be "brand", "platform", "product" or "category", got "${row.scope}"`)
       return
     }
 
@@ -69,6 +69,16 @@ export function parseRulesCSV(csvText) {
     const stackableStr = row.stackable.trim().toLowerCase()
     const stackable = stackableStr === 'true' || stackableStr === '1' || stackableStr === 'yes'
 
+    let minOrderValue = 0
+    if (row.min_order_value !== undefined && row.min_order_value.trim() !== '') {
+      const parsedMov = parseFloat(row.min_order_value)
+      if (isNaN(parsedMov) || parsedMov < 0) {
+        errors.push(`Row ${rowNum}: min_order_value must be a non-negative number, got "${row.min_order_value}"`)
+        return
+      }
+      minOrderValue = parsedMov
+    }
+
     data.push({
       ruleId: row.rule_id.trim(),
       scope,
@@ -76,6 +86,7 @@ export function parseRulesCSV(csvText) {
       type,
       value,
       stackable,
+      minOrderValue,
     })
   })
 
@@ -121,12 +132,15 @@ export function parseCartCSV(csvText) {
       return
     }
 
+    const category = row.category && row.category.trim() !== '' ? row.category.trim() : 'General'
+
     data.push({
       itemId: row.item_id.trim(),
       product: row.product.trim(),
       brand: row.brand.trim(),
       platform: row.platform.trim(),
       basePrice: Math.round(basePrice),
+      category,
     })
   })
 

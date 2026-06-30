@@ -40,15 +40,32 @@
 /**
  * Returns true if the rule applies to this cart item.
  */
-export function ruleMatchesItem(item, rule) {
-  const normalise = (s) => s.trim().toLowerCase()
+export function ruleMatchesItem(item, rule, subtotals = {}) {
+  const normalise = (s) => (s || '').trim().toLowerCase()
+  let matchesScope = false
+
   if (rule.scope === 'brand') {
-    return normalise(item.brand) === normalise(rule.appliesTo)
+    matchesScope = normalise(item.brand) === normalise(rule.appliesTo)
+  } else if (rule.scope === 'platform') {
+    matchesScope = normalise(item.platform) === normalise(rule.appliesTo)
+  } else if (rule.scope === 'product') {
+    matchesScope = normalise(item.product) === normalise(rule.appliesTo)
+  } else if (rule.scope === 'category') {
+    matchesScope = normalise(item.category) === normalise(rule.appliesTo)
   }
-  if (rule.scope === 'platform') {
-    return normalise(item.platform) === normalise(rule.appliesTo)
+
+  if (!matchesScope) return false
+
+  // Check Minimum Order Value if defined and greater than 0
+  if (rule.minOrderValue && rule.minOrderValue > 0) {
+    const scopeSubtotals = subtotals[rule.scope] || {}
+    const currentSubtotal = scopeSubtotals[normalise(rule.appliesTo)] || 0
+    if (currentSubtotal < rule.minOrderValue) {
+      return false
+    }
   }
-  return false
+
+  return true
 }
 
 /**
@@ -69,7 +86,12 @@ export function calculateDiscountAmount(price, rule) {
  * Builds the customer-facing reasoning string for an applied rule.
  */
 function ruleToReasoning(rule) {
-  const scopeLabel = rule.scope === 'brand' ? 'Brand' : 'Platform'
+  let scopeLabel = 'Offer'
+  if (rule.scope === 'brand') scopeLabel = 'Brand'
+  else if (rule.scope === 'platform') scopeLabel = 'Platform'
+  else if (rule.scope === 'product') scopeLabel = 'Product'
+  else if (rule.scope === 'category') scopeLabel = 'Category'
+
   if (rule.type === 'percentage') {
     return `${scopeLabel} offer: ${rule.value}% off`
   }
@@ -89,8 +111,8 @@ function ruleToReasoning(rule) {
  *   3. Apply any stackable rules on top of that price.
  *   4. Build the reasoning string from what was applied.
  */
-export function applyDiscounts(item, rules) {
-  const matchingRules = rules.filter((r) => ruleMatchesItem(item, r))
+export function applyDiscounts(item, rules, subtotals = {}) {
+  const matchingRules = rules.filter((r) => ruleMatchesItem(item, r, subtotals))
 
   // No rules match — return base price with explanation
   if (matchingRules.length === 0) {
@@ -99,6 +121,7 @@ export function applyDiscounts(item, rules) {
       product: item.product,
       brand: item.brand,
       platform: item.platform,
+      category: item.category || 'General',
       basePrice: item.basePrice,
       finalPrice: item.basePrice,
       totalDiscount: 0,
@@ -149,6 +172,7 @@ export function applyDiscounts(item, rules) {
     product: item.product,
     brand: item.brand,
     platform: item.platform,
+    category: item.category || 'General',
     basePrice: item.basePrice,
     finalPrice,
     totalDiscount: item.basePrice - finalPrice,
@@ -163,7 +187,29 @@ export function applyDiscounts(item, rules) {
  * Returns an array of DiscountResult objects.
  */
 export function processCart(cartItems, rules) {
-  return cartItems.map((item) => applyDiscounts(item, rules))
+  const normalise = (s) => (s || '').trim().toLowerCase()
+
+  // Compute subtotals for each scope to validate Minimum Order Values
+  const subtotals = {
+    brand: {},
+    platform: {},
+    product: {},
+    category: {},
+  }
+
+  for (const item of cartItems) {
+    const b = normalise(item.brand)
+    const p = normalise(item.platform)
+    const pr = normalise(item.product)
+    const c = normalise(item.category || 'General')
+
+    subtotals.brand[b] = (subtotals.brand[b] || 0) + item.basePrice
+    subtotals.platform[p] = (subtotals.platform[p] || 0) + item.basePrice
+    subtotals.product[pr] = (subtotals.product[pr] || 0) + item.basePrice
+    subtotals.category[c] = (subtotals.category[c] || 0) + item.basePrice
+  }
+
+  return cartItems.map((item) => applyDiscounts(item, rules, subtotals))
 }
 
 /**
