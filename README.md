@@ -3,7 +3,7 @@
 This is the enhanced implementation of the Opptra Discount Engine. It has been upgraded from a basic CSV runner into a fully interactive reactive sandbox, featuring live recalculations, manual data editors, a light/dark theme toggle, real-time analytics, and data exporters.
 
 ## Live Deployment
-- **Deployment URL:** [Add your live deployment link here before submitting]
+- **Deployment URL:** [https://discount-engine-qn5ylfyu6-ganeshmax522-4957s-projects.vercel.app]
 
 ## Running locally
 
