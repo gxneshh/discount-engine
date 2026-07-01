@@ -47,6 +47,16 @@ We have upgraded the Discount Engine with several advanced features, real-time i
 
 ---
 
-## 5. Default Datasets
+## 5. Clean Sandbox State
 
-- The app is now prepopulated with standard Opptra rules and cart items out-of-the-box, allowing immediate interaction without first loading files.
+- The app now initializes with clean, empty states for both rules and cart items, giving the user full control to build their dashboard from scratch by uploading CSVs or entering inputs manually.
+
+---
+
+## 6. AI NLP Command Parser (Tasks 1 & 2)
+
+- **AI Prompt Assistant:** Parses unstructured prompt commands into rules or cart items in real-time. Matches target attributes (scope, appliesTo, discount type, values, min spend threshold, and stackability) dynamically.
+- **AI Verification & Confirmation Modal:** Renders the parsed rule/item details inside a modal for user confirmation before inserting them into state.
+- **Interactive Verification Edits:** Users can manually edit the parsed properties directly inside the modal to rectify parsing errors.
+- **Semantic Validation Indicators:** The confirmation screen runs real-time checks to prevent bad data entry (e.g. flagging negative prices, duplicate IDs, or percentage values exceeding 100%). It disables the "Confirm" action if blocker errors are detected.
+

@@ -21,10 +21,11 @@ Open http://localhost:5173
 1. **Reactive Auto-Calculations:** The application automatically recalculates results the moment you edit rules, toggle rules, add items, or delete data. There's no need to manually click a calculate button.
 2. **Interactive Rule Toggles:** You can turn individual rules on or off using active checkboxes in the rules list to simulate different pricing scenarios.
 3. **Manual Entry Editors:** Quickly add custom rules and cart items via forms directly in the web dashboard without editing or re-uploading CSV files.
-4. **Light & Dark Theme Toggle:** Shift between light and dark modes in the header. Your preference is persisted automatically using browser `localStorage`.
-5. **Analytics Dashboard:** Visual metric cards show **Original Total**, **Total Savings (Rs & %)**, **Final Checkout Total**, and the count of **Active Rules**.
-6. **Progress Savings Bars:** Visual indicators in the items table instantly display the exact percentage savings per product.
-7. **CSV Exporter:** Download the final checkout summary (including applied rules, final price, and calculations) as `discount_results.csv`.
+4. **AI Prompt Assistant (Tasks 1 & 2):** Parse natural language prompt instructions (e.g., *"Add rule: 15% off for Flipkart when spend is over 1000"*) directly into structured configurations using a verification overlay.
+5. **Light & Dark Theme Toggle:** Shift between light and dark modes in the header. Your preference is persisted automatically using browser `localStorage`.
+6. **Analytics Dashboard:** Visual metric cards show **Original Total**, **Total Savings (Rs & %)**, **Final Checkout Total**, and the count of **Active Rules**.
+7. **Progress Savings Bars:** Visual indicators in the items table instantly display the exact percentage savings per product.
+8. **CSV Exporter:** Download the final checkout summary (including applied rules, final price, and calculations) as `discount_results.csv`.
 
 ---
 
@@ -35,11 +36,12 @@ src/
   engine/
     discountEngine.js   ← core discount logic (subtotal aggregation, MOV checks, category/product scope)
     csvParser.js        ← CSV → typed objects (min_order_value & category fields)
+    aiParser.js         ← AI NLP parser (prompt command -> structured rule/cart item)
   components/
     CsvUploader.jsx     ← file upload area
     DataTable.jsx       ← reusable table
     ErrorBanner.jsx     ← parse error display
-  App.jsx               ← main UI + reactive sandbox state + editors + analytics
+  App.jsx               ← main UI + reactive sandbox state + editors + analytics + AI verification modal
   main.jsx              ← entry point
   index.css             ← default typography configuration
 changes.md              ← detailed summary of implemented features
@@ -81,7 +83,7 @@ changes.md              ← detailed summary of implemented features
 - If no rules match, the base price is returned with a "No offers available" note.
 - **Minimum Order Value (MOV):** Evaluates if the cumulative subtotal of all items matching the rule's scope (e.g. brand "Natura Casa") meets or exceeds the required threshold.
 
-### Expected results for the preloaded sample data
+### Expected results for the sample CSV files (cart.csv + rules.csv)
 
 | Item    | Base Price | Final Price | Reasoning / Offers Applied                             |
 |---------|-----------|-------------|--------------------------------------------------------|

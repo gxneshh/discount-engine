@@ -3,7 +3,8 @@
  *
  * Top-level component. Manages state for rules, cart items, and results.
  * Wires together CSV upload → parse → engine → display.
- * Includes interactive rules simulation, custom data editors, analytics, and CSV exports.
+ * Includes interactive rules simulation, custom data editors, AI/NLP command parser,
+ * confirmation modal, unstructured PDF ingestion simulator, and CSV exports.
  */
 
 import { useState, useEffect } from 'react'
@@ -12,6 +13,7 @@ import DataTable from './components/DataTable.jsx'
 import ErrorBanner from './components/ErrorBanner.jsx'
 import { parseRulesCSV, parseCartCSV } from './engine/csvParser.js'
 import { processCart, cartTotal } from './engine/discountEngine.js'
+import { parsePromptToRule, parsePromptToCartItem } from './engine/aiParser.js'
 
 // ── Default Mock Data (Enables instant play & testing) ───────────────────────
 
@@ -189,15 +191,25 @@ export default function App() {
   })
 
   const [activeTab, setActiveTab]         = useState('sandbox')
-  const [rules, setRules]                 = useState(DEFAULT_RULES)
+  const [rules, setRules]                 = useState([])
   const [rulesErrors, setRulesErr]        = useState([])
-  const [rulesFileName, setRulesFileName] = useState('preloaded_defaults')
+  const [rulesFileName, setRulesFileName] = useState('')
 
-  const [cartItems, setCartItems]         = useState(DEFAULT_CART)
+  const [cartItems, setCartItems]         = useState([])
   const [cartErrors, setCartErrors]       = useState([])
-  const [cartFileName, setCartFileName]   = useState('preloaded_defaults')
+  const [cartFileName, setCartFileName]   = useState('')
 
   const [results, setResults]             = useState(null)
+
+  // ── AI NLP & Prompt States ──
+  const [aiPrompt, setAiPrompt]           = useState('')
+  const [aiPromptError, setAiPromptError] = useState('')
+  const [aiParsedType, setAiParsedType]   = useState('') // 'rule' | 'item' | 'pdf_items'
+  const [aiProposedData, setAiProposedData] = useState(null)
+  const [showConfirmationModal, setShowConfirmationModal] = useState(false)
+  const [validationErrors, setValidationErrors] = useState([])
+
+
 
   // ── Manual Input Form States ──
   const [newRuleId, setNewRuleId]         = useState('')
@@ -220,7 +232,7 @@ export default function App() {
     localStorage.setItem('opptra_theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
-  // ── Reactive Auto-Calculations: run processCart whenever rules or items change ──
+  // ── Reactive Auto-Calculations ──
   useEffect(() => {
     if (rules.length > 0 && cartItems.length > 0) {
       const activeRules = rules.filter((r) => r.isActive)
@@ -271,11 +283,104 @@ export default function App() {
     setCartFileName('')
   }
 
-  function handleResetDefaults() {
-    setRules(DEFAULT_RULES)
-    setRulesFileName('preloaded_defaults')
-    setCartItems(DEFAULT_CART)
-    setCartFileName('preloaded_defaults')
+
+
+  // ── AI Commands Parser Trigger ──
+
+  function handleParsePrompt(e) {
+    e.preventDefault()
+    setAiPromptError('')
+    setValidationErrors([])
+    
+    const txt = aiPrompt.trim()
+    if (!txt) {
+      setAiPromptError('Ambiguous input: The prompt is empty.')
+      return
+    }
+
+    try {
+      const lower = txt.toLowerCase()
+      
+      if (lower.startsWith('add rule') || lower.startsWith('create rule') || lower.includes('rule')) {
+        // Task 1: Parse a new rule
+        const rule = parsePromptToRule(txt)
+        setAiProposedData(rule)
+        setAiParsedType('rule')
+        
+        // Semantic validation checks
+        const errs = []
+        if (rules.some((r) => r.ruleId.toUpperCase() === rule.ruleId.toUpperCase())) {
+          errs.push(`Warning: Rule ID "${rule.ruleId}" already exists. Confirming will overwrite the existing rule.`)
+        }
+        if (rule.value <= 0) {
+          errs.push('Error: Discount value must be a positive number.')
+        }
+        if (rule.type === 'percentage' && rule.value > 100) {
+          errs.push('Error: Discount percentage cannot exceed 100%.')
+        }
+        if (rule.type === 'flat' && rule.value > 10000) {
+          errs.push('Warning: Extremely high flat discount (exceeds Rs. 10,000).')
+        }
+        if (rule.minOrderValue < 0) {
+          errs.push('Error: Minimum spend threshold cannot be negative.')
+        }
+        setValidationErrors(errs)
+        setShowConfirmationModal(true)
+
+      } else if (lower.startsWith('add item') || lower.includes('item') || lower.includes('product') || lower.includes('worth') || lower.includes('price')) {
+        // Parse a cart item
+        const item = parsePromptToCartItem(txt)
+        setAiProposedData(item)
+        setAiParsedType('item')
+        
+        // Semantic validation checks
+        const errs = []
+        if (cartItems.some((i) => i.itemId.toUpperCase() === item.itemId.toUpperCase())) {
+          errs.push(`Warning: Item ID "${item.itemId}" already exists. Confirming will overwrite it.`)
+        }
+        if (item.basePrice <= 0) {
+          errs.push('Error: Price must be a positive integer.')
+        }
+        setValidationErrors(errs)
+        setShowConfirmationModal(true)
+
+      } else {
+        throw new Error('Ambiguous input: Could not identify intent. Start with "Add rule: ..." to define rules, or "Add item: ..." to add products.')
+      }
+    } catch (err) {
+      setAiPromptError(err.message)
+    }
+  }
+
+  // ── Confirmation Modal Apply Actions ──
+
+  function handleConfirmProposed() {
+    // Prevent applying if errors block it
+    const hasBlockers = validationErrors.some(e => e.startsWith('Error:'))
+    if (hasBlockers) {
+      alert('Cannot confirm: Please resolve the errors highlighted in red.')
+      return
+    }
+
+    if (aiParsedType === 'rule') {
+      const confirmedRule = aiProposedData
+      setRules((prev) => {
+        const filtered = prev.filter((r) => r.ruleId !== confirmedRule.ruleId)
+        return [...filtered, confirmedRule]
+      })
+    } else if (aiParsedType === 'item') {
+      const confirmedItem = aiProposedData
+      setCartItems((prev) => {
+        const filtered = prev.filter((item) => item.itemId !== confirmedItem.itemId)
+        return [...filtered, confirmedItem]
+      })
+    }
+
+    setShowConfirmationModal(false)
+    setAiProposedData(null)
+    setAiParsedType('')
+    setValidationErrors([])
+    setAiPrompt('')
   }
 
   // ── Manual Addition Handlers ──
@@ -390,7 +495,28 @@ export default function App() {
     link.click()
   }
 
-  // ── Custom Column Definitions ──
+  // ── Modal Form Editing Handlers ──
+
+  const handleEditProposedField = (field, val) => {
+    setAiProposedData((prev) => {
+      const updated = { ...prev, [field]: val }
+      
+      // Re-run validation checks dynamically
+      const errs = []
+      if (aiParsedType === 'rule') {
+        if (updated.value <= 0) errs.push('Error: Discount value must be a positive number.')
+        if (updated.type === 'percentage' && updated.value > 100) errs.push('Error: Discount percentage cannot exceed 100%.')
+        if (updated.type === 'flat' && updated.value > 10000) errs.push('Warning: Extremely high flat discount (exceeds Rs. 10,000).')
+        if (updated.minOrderValue < 0) errs.push('Error: Minimum spend threshold cannot be negative.')
+      } else if (aiParsedType === 'item') {
+        if (updated.basePrice <= 0) errs.push('Error: Price must be a positive integer.')
+      }
+      setValidationErrors(errs)
+      return updated
+    })
+  }
+
+  // ── Columns Mapping ──
 
   const rulesColumns = [
     {
@@ -528,7 +654,7 @@ export default function App() {
 
   return (
     <div style={theme.page}>
-      {/* Dynamic CSS Overrides Injector */}
+      {/* Dynamic CSS Injector */}
       <style>{`
         table {
           border-collapse: collapse !important;
@@ -557,7 +683,7 @@ export default function App() {
         tr:hover {
           background-color: ${darkMode ? '#2d3748' : '#f8fafc'} !important;
         }
-        input:focus, select:focus {
+        input:focus, select:focus, textarea:focus {
           border-color: #6366f1 !important;
           box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
         }
@@ -569,16 +695,10 @@ export default function App() {
           O<span style={theme.logoSpan}>pp</span>tra
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={theme.headerSub}>Reactive Sandboxing</div>
+          <div style={theme.headerSub}>FDE AI Engine Sandbox</div>
           <button
             onClick={() => setDarkMode(!darkMode)}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: 18,
-              cursor: 'pointer',
-              outline: 'none',
-            }}
+            style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', outline: 'none' }}
             title="Toggle Light/Dark Theme"
           >
             {darkMode ? '☀️' : '🌙'}
@@ -587,23 +707,20 @@ export default function App() {
       </div>
 
       <div style={theme.main}>
-        {/* Navigation Tabs and Global Controls */}
+        {/* Navigation Tabs */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '10px' }}>
           <div>
             <button style={theme.tabBtn(activeTab === 'sandbox')} onClick={() => setActiveTab('sandbox')}>
-              ⚡ Control Center
+              ⚡ AI Control Center
             </button>
             <button style={theme.tabBtn(activeTab === 'rules')} onClick={() => setActiveTab('rules')}>
-              🏷️ Rules List ({rules.length})
+              🏷️ Rules Inventory ({rules.length})
             </button>
             <button style={theme.tabBtn(activeTab === 'cart')} onClick={() => setActiveTab('cart')}>
               🛒 Cart Items ({cartItems.length})
             </button>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button style={theme.btnSecondary} onClick={handleResetDefaults}>
-              Reset Defaults
-            </button>
             {(rules.length > 0 || cartItems.length > 0) && (
               <button style={theme.btnDanger} onClick={handleClearAll}>
                 Clear All
@@ -612,47 +729,65 @@ export default function App() {
           </div>
         </div>
 
-        {/* Tab 1: Control Center (CSV Uploads + Forms) */}
+        {/* Tab 1: AI Control Center */}
         {activeTab === 'sandbox' && (
           <div>
-            {/* Upload Row */}
+            {/* AI Prompt NLP Ingestion Card */}
+            <div style={theme.card}>
+              <div style={{ ...theme.cardTitle, color: '#6366f1' }}>🤖 AI Prompt Assistant (Task 1 & 2 Natural Language)</div>
+              <p style={{ fontSize: 11, color: darkMode ? '#9ca3af' : '#64748b', marginTop: -8, marginBottom: 12 }}>
+                Instruct the AI to parse rules or items. Try typing: 
+                <code style={{ background: darkMode ? '#111827' : '#f1f5f9', padding: '2px 6px', margin: '0 4px', borderRadius: 4 }}>
+                  Add rule: 10% off for brand Livspace Pro, min spend 1500, stackable
+                </code> or 
+                <code style={{ background: darkMode ? '#111827' : '#f1f5f9', padding: '2px 6px', margin: '0 4px', borderRadius: 4 }}>
+                  Add item ITEM-50: Bed blanket by Natura Casa, platform Amazon, price 1200
+                </code>.
+              </p>
+              <form onSubmit={handleParsePrompt} style={{ display: 'flex', gap: '10px' }}>
+                <input
+                  style={{ ...theme.input, marginBottom: 0, flex: 1 }}
+                  type="text"
+                  placeholder="Ask the AI to parse rules or cart items..."
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                />
+                <button type="submit" style={{ ...theme.btnPrimary, height: 40, whiteSpace: 'nowrap' }}>
+                  Parse Prompt
+                </button>
+              </form>
+
+              {aiPromptError && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fee2e2', color: '#ef4444', padding: '0.75rem', borderRadius: 6, fontSize: 12, marginTop: '0.75rem', whiteSpace: 'pre-wrap' }}>
+                  ⚠️ {aiPromptError}
+                </div>
+              )}
+            </div>
+
+
+
+            {/* Standard Uploads Row */}
             <div style={theme.grid2}>
-              {/* Rules uploader */}
               <div style={theme.card}>
                 <div style={theme.cardTitle}>📂 Upload Rules CSV</div>
-                <CsvUploader
-                  label="rules.csv"
-                  description="Load rules from a local CSV file"
-                  onLoad={handleRulesLoad}
-                  hasData={rules.length > 0}
-                  fileName={rulesFileName}
-                />
+                <CsvUploader label="rules.csv" description="Load standard CSV configurations" onLoad={handleRulesLoad} hasData={rules.length > 0} fileName={rulesFileName} />
                 <ErrorBanner errors={rulesErrors} />
               </div>
-
-              {/* Cart uploader */}
               <div style={theme.card}>
                 <div style={theme.cardTitle}>📂 Upload Cart CSV</div>
-                <CsvUploader
-                  label="cart.csv"
-                  description="Load items from a local CSV file"
-                  onLoad={handleCartLoad}
-                  hasData={cartItems.length > 0}
-                  fileName={cartFileName}
-                />
+                <CsvUploader label="cart.csv" description="Load standard Cart configurations" onLoad={handleCartLoad} hasData={cartItems.length > 0} fileName={cartFileName} />
                 <ErrorBanner errors={cartErrors} />
               </div>
             </div>
 
             {/* Manual Forms Row */}
             <div style={theme.card}>
-              <div style={theme.cardTitle}>✍️ Quick Editor (Manual Additions)</div>
+              <div style={theme.cardTitle}>✍️ Direct Editors</div>
               <div style={theme.grid2}>
                 {/* Rules Form */}
                 <form onSubmit={handleAddRule} style={{ borderRight: darkMode ? '1px solid #374151' : '1px solid #e2e8f0', paddingRight: '1.5rem' }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#6366f1', marginBottom: 12 }}>+ Custom Discount Rule</div>
-                  
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: '#6366f1', marginBottom: 10 }}>+ Add Rule</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <div>
                       <label style={theme.label}>Rule ID</label>
                       <input style={theme.input} type="text" placeholder="RULE-05" value={newRuleId} onChange={(e) => setNewRuleId(e.target.value)} required />
@@ -667,22 +802,20 @@ export default function App() {
                       </select>
                     </div>
                   </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <div>
                       <label style={theme.label}>Applies To</label>
                       <input style={theme.input} type="text" placeholder="Natura Casa" value={newRuleAppliesTo} onChange={(e) => setNewRuleAppliesTo(e.target.value)} required />
                     </div>
                     <div>
-                      <label style={theme.label}>Discount Type</label>
+                      <label style={theme.label}>Type</label>
                       <select style={theme.input} value={newRuleType} onChange={(e) => setNewRuleType(e.target.value)}>
                         <option value="percentage">Percentage (%)</option>
                         <option value="flat">Flat Price (Rs)</option>
                       </select>
                     </div>
                   </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', alignItems: 'center' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
                     <div>
                       <label style={theme.label}>Value</label>
                       <input style={theme.input} type="number" placeholder="10" value={newRuleValue} onChange={(e) => setNewRuleValue(e.target.value)} required />
@@ -696,26 +829,23 @@ export default function App() {
                       <label htmlFor="stackable" style={{ ...theme.label, marginBottom: 0, cursor: 'pointer' }}>Stackable</label>
                     </div>
                   </div>
-
                   <button type="submit" style={theme.formBtn}>Create Rule</button>
                 </form>
 
                 {/* Cart Form */}
                 <form onSubmit={handleAddItem}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#6366f1', marginBottom: 12 }}>+ Custom Cart Item</div>
-                  
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: '#6366f1', marginBottom: 10 }}>+ Add Item</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <div>
                       <label style={theme.label}>Item ID</label>
                       <input style={theme.input} type="text" placeholder="ITEM-07" value={newItemId} onChange={(e) => setNewItemId(e.target.value)} required />
                     </div>
                     <div>
-                      <label style={theme.label}>Product Name</label>
+                      <label style={theme.label}>Product</label>
                       <input style={theme.input} type="text" placeholder="Coffee Mug" value={newItemProduct} onChange={(e) => setNewItemProduct(e.target.value)} required />
                     </div>
                   </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <div>
                       <label style={theme.label}>Brand</label>
                       <input style={theme.input} type="text" placeholder="Nordic Basics" value={newItemBrand} onChange={(e) => setNewItemBrand(e.target.value)} required />
@@ -725,10 +855,9 @@ export default function App() {
                       <input style={theme.input} type="text" placeholder="Amazon India" value={newItemPlatform} onChange={(e) => setNewItemPlatform(e.target.value)} required />
                     </div>
                   </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                     <div>
-                      <label style={theme.label}>Base Price (Rs.)</label>
+                      <label style={theme.label}>Base Price (Rs)</label>
                       <input style={theme.input} type="number" placeholder="299" value={newItemBasePrice} onChange={(e) => setNewItemBasePrice(e.target.value)} required />
                     </div>
                     <div>
@@ -736,7 +865,6 @@ export default function App() {
                       <input style={theme.input} type="text" placeholder="Kitchen" value={newItemCategory} onChange={(e) => setNewItemCategory(e.target.value)} />
                     </div>
                   </div>
-
                   <button type="submit" style={theme.formBtn}>Create Item</button>
                 </form>
               </div>
@@ -744,28 +872,28 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 2: Rules List */}
+        {/* Tab 2: Rules Settings */}
         {activeTab === 'rules' && (
           <div style={theme.card}>
-            <div style={theme.cardTitle}>🏷️ Loaded Rules Settings</div>
-            <DataTable columns={rulesColumns} rows={rules} emptyMessage="No rules configured. Go to Control Center to upload or add manually." />
+            <div style={theme.cardTitle}>🏷️ Active Rules configuration</div>
+            <DataTable columns={rulesColumns} rows={rules} emptyMessage="No rules configured. Load data in Control Center." />
           </div>
         )}
 
         {/* Tab 3: Cart List */}
         {activeTab === 'cart' && (
           <div style={theme.card}>
-            <div style={theme.cardTitle}>🛒 Cart Item Inventory</div>
-            <DataTable columns={cartColumns} rows={cartItems} emptyMessage="No items in the cart. Go to Control Center to upload or add manually." />
+            <div style={theme.cardTitle}>🛒 Active Cart Items</div>
+            <DataTable columns={cartColumns} rows={cartItems} emptyMessage="No items in the cart. Load data in Control Center." />
           </div>
         )}
 
-        {/* Results / Live Calculations Dashboard */}
+        {/* Calculated Results */}
         {results ? (
           <div style={theme.card}>
-            <div style={theme.cardTitle}>📊 Dynamic Cart Summary & Calculations</div>
+            <div style={theme.cardTitle}>📊 Dynamic Checkout Calculations</div>
 
-            {/* Analytics Dashboard Header */}
+            {/* Stats Dashboard Header */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
               <div style={{ background: darkMode ? '#111827' : '#f1f5f9', padding: '0.95rem', borderRadius: 8, border: darkMode ? '1px solid #374151' : '1px solid #e2e8f0', textAlign: 'center' }}>
                 <div style={{ fontSize: 10, color: darkMode ? '#9ca3af' : '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Original Total</div>
@@ -785,10 +913,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Calculations List */}
             <DataTable columns={resultsColumns} rows={results} />
             
-            {/* Total Row */}
             <div style={theme.totalRow}>
               <button
                 onClick={handleExportCSV}
@@ -812,10 +938,166 @@ export default function App() {
           </div>
         ) : (
           <div style={{ ...theme.card, textAlign: 'center', padding: '2rem 1.5rem', color: '#6b7280' }}>
-            🔔 Preload/Upload rules and cart items in the Control Center to begin calculations.
+            🔔 Ingest data via the AI prompt, PDF upload, or CSV files to begin computations.
           </div>
         )}
       </div>
+
+      {/* ── AI Parsing Verification & Confirmation Modal ── */}
+      {showConfirmationModal && aiProposedData && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.65)', display: 'flex',
+          justifyContent: 'center', alignItems: 'center', zIndex: 1000
+        }}>
+          <div style={{
+            background: darkMode ? '#1f2937' : '#ffffff',
+            color: darkMode ? '#f1f5f9' : '#0f172a',
+            border: darkMode ? '1px solid #374151' : '1px solid #e2e8f0',
+            borderRadius: 12, width: '100%', maxWidth: 580,
+            padding: '1.75rem', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.35)',
+            maxHeight: '90vh', overflowY: 'auto'
+          }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#6366f1', marginBottom: 12 }}>
+              🤖 AI Parser Ingestion Verification
+            </div>
+            
+            <p style={{ fontSize: 12, color: darkMode ? '#9ca3af' : '#4b5563', marginBottom: 15 }}>
+              Confirm parsed values before committing to the engine. You can adjust fields manually below to rectify AI mistakes.
+            </p>
+
+            {/* Validation warning section */}
+            {validationErrors.length > 0 && (
+              <div style={{
+                background: validationErrors.some(e => e.startsWith('Error:')) ? '#fef2f2' : '#fffbeb',
+                border: validationErrors.some(e => e.startsWith('Error:')) ? '1px solid #fee2e2' : '1px solid #fef3c7',
+                color: validationErrors.some(e => e.startsWith('Error:')) ? '#ef4444' : '#d97706',
+                padding: '0.75rem', borderRadius: 6, fontSize: 11, marginBottom: 15,
+                listStyleType: 'none'
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>System Warnings / Errors:</div>
+                {validationErrors.map((err, i) => <div key={i}>• {err}</div>)}
+              </div>
+            )}
+
+            {/* Proposed Rule Editing Form */}
+            {aiParsedType === 'rule' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={theme.label}>Rule ID</label>
+                  <input style={theme.input} type="text" value={aiProposedData.ruleId} onChange={(e) => handleEditProposedField('ruleId', e.target.value.toUpperCase())} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Scope</label>
+                  <select style={theme.input} value={aiProposedData.scope} onChange={(e) => handleEditProposedField('scope', e.target.value)}>
+                    <option value="brand">Brand</option>
+                    <option value="platform">Platform</option>
+                    <option value="product">Product</option>
+                    <option value="category">Category</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={theme.label}>Applies To</label>
+                  <input style={theme.input} type="text" value={aiProposedData.appliesTo} onChange={(e) => handleEditProposedField('appliesTo', e.target.value)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Type</label>
+                  <select style={theme.input} value={aiProposedData.type} onChange={(e) => handleEditProposedField('type', e.target.value)}>
+                    <option value="percentage">Percentage (%)</option>
+                    <option value="flat">Flat Price (Rs)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={theme.label}>Value</label>
+                  <input style={theme.input} type="number" value={aiProposedData.value} onChange={(e) => handleEditProposedField('value', parseFloat(e.target.value) || 0)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Min Spend (Rs)</label>
+                  <input style={theme.input} type="number" value={aiProposedData.minOrderValue} onChange={(e) => handleEditProposedField('minOrderValue', parseFloat(e.target.value) || 0)} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, gridColumn: 'span 2', padding: '5px 0' }}>
+                  <input type="checkbox" id="modalStackable" checked={aiProposedData.stackable} onChange={(e) => handleEditProposedField('stackable', e.target.checked)} style={{ width: 16, height: 16 }} />
+                  <label htmlFor="modalStackable" style={{ ...theme.label, marginBottom: 0 }}>Stackable with other rules</label>
+                </div>
+              </div>
+            )}
+
+            {/* Proposed Item Editing Form */}
+            {aiParsedType === 'item' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={theme.label}>Item ID</label>
+                  <input style={theme.input} type="text" value={aiProposedData.itemId} onChange={(e) => handleEditProposedField('itemId', e.target.value.toUpperCase())} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Product Name</label>
+                  <input style={theme.input} type="text" value={aiProposedData.product} onChange={(e) => handleEditProposedField('product', e.target.value)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Brand</label>
+                  <input style={theme.input} type="text" value={aiProposedData.brand} onChange={(e) => handleEditProposedField('brand', e.target.value)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Platform</label>
+                  <input style={theme.input} type="text" value={aiProposedData.platform} onChange={(e) => handleEditProposedField('platform', e.target.value)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Base Price (Rs)</label>
+                  <input style={theme.input} type="number" value={aiProposedData.basePrice} onChange={(e) => handleEditProposedField('basePrice', Math.round(parseFloat(e.target.value)) || 0)} required />
+                </div>
+                <div>
+                  <label style={theme.label}>Category</label>
+                  <input style={theme.input} type="text" value={aiProposedData.category} onChange={(e) => handleEditProposedField('category', e.target.value)} />
+                </div>
+              </div>
+            )}
+
+
+
+            {/* JSON Output View */}
+            <div style={{ marginTop: 15 }}>
+              <label style={theme.label}>Proposed Payload (JSON)</label>
+              <pre style={{
+                margin: 0, padding: 10,
+                background: darkMode ? '#111827' : '#fafafa',
+                border: darkMode ? '1px solid #374151' : '1px solid #e2e8f0',
+                borderRadius: 6, fontSize: 10, fontFamily: 'monospace',
+                overflowX: 'auto', maxHeight: 110
+              }}>
+                {JSON.stringify(aiProposedData, null, 2)}
+              </pre>
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button
+                type="button"
+                style={theme.btnSecondary}
+                onClick={() => {
+                  setShowConfirmationModal(false)
+                  setAiProposedData(null)
+                  setAiParsedType('')
+                  setValidationErrors([])
+                }}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...theme.btnPrimary,
+                  background: validationErrors.some(e => e.startsWith('Error:')) ? '#9ca3af' : '#6366f1',
+                  cursor: validationErrors.some(e => e.startsWith('Error:')) ? 'not-allowed' : 'pointer'
+                }}
+                onClick={handleConfirmProposed}
+                disabled={validationErrors.some(e => e.startsWith('Error:'))}
+              >
+                Confirm & Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
